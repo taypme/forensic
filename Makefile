@@ -7,6 +7,10 @@ SRC=src/main.c src/logging.c src/util.c src/workers.c src/sweep_registry.c src/s
 OBJ=$(SRC:.c=.o)
 BIN=forensic
 
+TEST_SRC=tests/test_args.c src/arg_parser.c src/logging.c
+TEST_OBJ=$(TEST_SRC:.c=.o)
+TEST_BIN=tests/test_args
+
 all: $(BIN)
 
 $(BIN): $(OBJ)
@@ -15,7 +19,14 @@ $(BIN): $(OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-clean:
-	rm -f $(OBJ) $(BIN)
+test: $(TEST_BIN)
+	./$(TEST_BIN)
 
-.PHONY: all clean
+$(TEST_BIN): $(TEST_OBJ)
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $(TEST_OBJ) $(LDFLAGS)
+
+clean:
+	rm -f $(OBJ) $(BIN) $(TEST_OBJ) $(TEST_BIN)
+
+.PHONY: all clean test

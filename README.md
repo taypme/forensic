@@ -5,6 +5,7 @@ Forensic is a single C11 binary that sweeps a target directory and normalizes it
 ## Build
 - Requirements: GCC or Clang with C11 support, OpenSSL (EVP SHA-256), and a POSIX-like environment.
 - Build: `make clean && make` produces the `./forensic` binary in the repo root (object files land in `src/`). Use `make clean` to drop build artifacts.
+- Tests: `make test` runs the unit test suite for command-line argument parsing. See `tests/README.md` for details.
 - Utility: `bin/unlimit` removes core dump limits if you need crash dumps during debugging.
 
 ## Usage

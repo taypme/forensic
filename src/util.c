@@ -4,12 +4,24 @@
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 bool ensure_dir(const char *path, int mode) {
+    if(!path) return false;
     struct stat st;
     if(stat(path, &st)==0) return S_ISDIR(st.st_mode);
     if(errno == ENOENT) {
+        // Try to create parent directories first
+        char parent[PATH_MAX];
+        if(path_dirname(path, parent, sizeof parent)) {
+            // Only recurse if parent is different and not "." or "/"
+            if(strcmp(parent, path) != 0 && strcmp(parent, ".") != 0 && strcmp(parent, "/") != 0) {
+                ensure_dir(parent, mode);
+            }
+        }
         if(mkdir(path, mode)==0) return true;
+        // If mkdir failed, check if it exists now (race condition or already created)
+        if(stat(path, &st)==0 && S_ISDIR(st.st_mode)) return true;
     }
     return false;
 }
@@ -52,4 +64,51 @@ bool normalize_root(char *path) {
     size_t len = strlen(path);
     while(len>1 && path[len-1]=='/') { path[len-1]='\0'; len--; }
     return true;
+}
+
+bool copy_file(const char *src, const char *dst) {
+    if(!src || !dst) return false;
+    
+    // Get source file stats to preserve permissions
+    struct stat st;
+    if(stat(src, &st) != 0) return false;
+    if(!S_ISREG(st.st_mode)) return false;
+    
+    // Ensure destination directory exists
+    char dst_dir[PATH_MAX];
+    if(!path_dirname(dst, dst_dir, sizeof dst_dir)) return false;
+    if(!ensure_dir(dst_dir, 0755)) return false;
+    
+    // Open source file
+    FILE *src_fp = fopen(src, "rb");
+    if(!src_fp) return false;
+    
+    // Open destination file
+    FILE *dst_fp = fopen(dst, "wb");
+    if(!dst_fp) {
+        fclose(src_fp);
+        return false;
+    }
+    
+    // Copy file contents
+    char buffer[8192];
+    size_t bytes_read;
+    bool success = true;
+    while((bytes_read = fread(buffer, 1, sizeof buffer, src_fp)) > 0) {
+        if(fwrite(buffer, 1, bytes_read, dst_fp) != bytes_read) {
+            success = false;
+            break;
+        }
+    }
+    
+    fclose(src_fp);
+    if(fclose(dst_fp) != 0) success = false;
+    
+    // Preserve file permissions
+    if(success && chmod(dst, st.st_mode & 0777) != 0) {
+        // Non-fatal, but log if needed
+        success = false;
+    }
+    
+    return success;
 }

@@ -22,6 +22,7 @@ typedef struct {
     bool enable_sanitize_underscores;
     bool enable_identifiers;
     unsigned int ident_mask;
+    char copy_to[PATH_MAX];
 } SweepContext;
 
 #endif

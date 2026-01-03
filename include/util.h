@@ -14,5 +14,6 @@ bool path_join(const char *a, const char *b, char *out, size_t out_sz);
 bool path_basename(const char *path, char *out, size_t out_sz);
 bool path_dirname(const char *path, char *out, size_t out_sz);
 bool normalize_root(char *path);
+bool copy_file(const char *src, const char *dst);
 
 #endif

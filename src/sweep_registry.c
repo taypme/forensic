@@ -978,27 +978,36 @@ typedef struct {
 } RouteRule;
 
 static RouteRule g_route_rules[] = {
-    {"c","c"}, {"h","c"},
-    {"js","javascript"}, {"ts","javascript"},
+    {"c","c"}, {"h","c"}, {"cpp","c"}, {"cc","c"}, {"cxx","c"},
+    {"js","javascript"}, {"ts","javascript"}, {"jsx","javascript"}, {"mjs","javascript"}, {"cjs","javascript"}, {"mts","javascript"}, {"cts","javascript"}, {"flow","javascript"},
     {"py","python"},
     {"rb","ruby"},
     {"php","php"}, {"module","php"}, {"install","php"},
     {"md","markdown"}, {"markdown","text"},
     {"css","css"}, {"scss","css"}, {"less","css"},
     {"json","json"},
-    {"svg","image"}, {"png","image"}, {"jpg","image"}, {"jpeg","image"}, {"bmp","image"}, {"ico","image"}, {"gif","image"},
+    {"svg","image"}, {"png","image"}, {"jpg","image"}, {"jpeg","image"}, {"bmp","image"}, {"ico","image"}, {"gif","image"}, {"webp","image"}, {"avif","image"}, {"pdf","image"},
     {"xml","data"}, {"csv","data"}, {"sql","data"},
     {"twig","template"},
     {"yml","yml"}, {"yaml","yml"},
     {"map","map"},
     {"html","html"},
     {"txt","text"},
+    {"java","java"}, {"class","java"}, {"kt","java"},
+    {"mp3","music"}, {"mp4","music"}, {"m4a","music"}, {"wav","music"}, {"ogg","music"}, {"flac","music"}, {"aac","music"},
+    {"mov","music"}, {"avi","music"}, {"mkv","music"}, {"webm","music"}, {"flv","music"},
+    {"exe","executable"}, {"bin","executable"}, {"app","executable"}, {"deb","executable"}, {"rpm","executable"}, {"dmg","executable"}, {"pkg","executable"}, {"msi","executable"}, {"run","executable"}, {"bat","executable"}, {"cmd","executable"}, {"com","executable"}, {"scr","executable"},
+    {"sh","executable"}, {"bash","executable"}, {"zsh","executable"}, {"fish","executable"}, {"ps1","executable"}, {"psm1","executable"},
 };
 
 static const char *pick_category(const char *name) {
     if(strstr(name, ".tpl.php")) return "template";
     const char *dot = strrchr(name, '.');
-    if(!dot || !dot[1]) return "unknown";
+    if(!dot || !dot[1]) {
+        // Files without extensions: check if they might be executables
+        // This is a heuristic - files without extensions are often executables on Unix
+        return "executable";
+    }
     const char *ext = dot + 1;
     for(size_t i=0;i<sizeof(g_route_rules)/sizeof(g_route_rules[0]);i++) {
         if(strcmp(ext, g_route_rules[i].ext)==0) return g_route_rules[i].category;
@@ -1008,7 +1017,7 @@ static const char *pick_category(const char *name) {
 
 static int sweep_category_create(SweepContext *ctx) {
     char lbl[16]; sweep_label(SWEEP_CATEGORY_CREATE, lbl, sizeof lbl);
-    const char *cats[] = {"unknown","archive","c","javascript","python","ruby","php","markdown","css","json","image","data","template","yml","map","html","text"};
+    const char *cats[] = {"unknown","archive","c","javascript","python","ruby","php","markdown","css","json","image","data","template","yml","map","html","text","java","music","executable"};
     for(size_t i=0;i<sizeof(cats)/sizeof(cats[0]);i++) {
         char dir[PATH_MAX];
         path_join(ctx->root, cats[i], dir, sizeof dir);
@@ -1026,6 +1035,8 @@ static int sweep_file_move(SweepContext *ctx) {
     ScanState ss = {.ctx = ctx, .files_seen = 0, .dirs_seen = 0, .size_cap = ctx->size_cap_bytes};
     scan_directory_parallel(ctx->root, ctx->threads, dir_guard, file_guard, &ss, &files, &file_count, &dir_count);
     size_t moved = 0;
+    size_t copied = 0;
+    bool do_copy = (ctx->copy_to[0] != '\0');
     for(size_t i=0;i<file_count;i++) {
         char base[NAME_MAX];
         path_basename(files[i], base, sizeof base);
@@ -1035,16 +1046,36 @@ static int sweep_file_move(SweepContext *ctx) {
         ensure_dir(dest_dir, 0755);
         char dest[PATH_MAX];
         path_join(dest_dir, base, dest, sizeof dest);
-        if(svc_rename_ctx(ctx, files[i], dest)==0) {
-            moved++;
-            char rel[PATH_MAX]; sanitize_live_path(ctx, dest, rel, sizeof rel);
-            SVC_LOG_LIVE_STATUS(ctx, lbl, rel);
+        
+        if(do_copy) {
+            // Copy to copy_to location, preserving original files in place
+            char copy_dest_dir[PATH_MAX];
+            path_join(ctx->copy_to, cat, copy_dest_dir, sizeof copy_dest_dir);
+            ensure_dir(copy_dest_dir, 0755);
+            char copy_dest[PATH_MAX];
+            path_join(copy_dest_dir, base, copy_dest, sizeof copy_dest);
+            if(copy_file(files[i], copy_dest)) {
+                copied++;
+                char rel[PATH_MAX]; sanitize_live_path(ctx, copy_dest, rel, sizeof rel);
+                SVC_LOG_LIVE_STATUS(ctx, lbl, rel);
+            }
+        } else {
+            // Normal operation: move files to refactored structure
+            if(svc_rename_ctx(ctx, files[i], dest)==0) {
+                moved++;
+                char rel[PATH_MAX]; sanitize_live_path(ctx, dest, rel, sizeof rel);
+                SVC_LOG_LIVE_STATUS(ctx, lbl, rel);
+            }
         }
         free(files[i]);
     }
     free(files);
     SVC_LOG_LIVE_DONE(ctx);
-    SVC_LOG_INFO(ctx, "%s moved=%zu", lbl, moved);
+    if(do_copy) {
+        SVC_LOG_INFO(ctx, "%s moved=%zu copied=%zu", lbl, moved, copied);
+    } else {
+        SVC_LOG_INFO(ctx, "%s moved=%zu", lbl, moved);
+    }
     return 0;
 }
 
@@ -1393,6 +1424,8 @@ static int sweep_pattern_groups(SweepContext *ctx) {
     char lbl[16]; sweep_label(SWEEP_PATTERN_GROUPS, lbl, sizeof lbl);
     log_sweep_start(lbl, "pattern grouping starting");
     size_t moved_total = 0;
+    size_t copied_total = 0;
+    bool do_copy = (ctx->copy_to[0] != '\0');
     for(size_t i=0;i<g_pattern_group_count;i++) {
         PatternGroup *pg = &g_pattern_groups[i];
         if(pg->count < 2) continue;
@@ -1402,6 +1435,16 @@ static int sweep_pattern_groups(SweepContext *ctx) {
         if(len + 4 + strlen(pg->sanitized) >= sizeof group_dir) continue;
         snprintf(group_dir + len, sizeof group_dir - len, "/%s.d", pg->sanitized);
         ensure_dir(group_dir, 0755);
+        
+        char copy_group_dir[PATH_MAX] = {0};
+        if(do_copy) {
+            if(!path_join(ctx->copy_to, pg->category, copy_group_dir, sizeof copy_group_dir)) continue;
+            size_t copy_len = strlen(copy_group_dir);
+            if(copy_len + 4 + strlen(pg->sanitized) >= sizeof copy_group_dir) continue;
+            snprintf(copy_group_dir + copy_len, sizeof copy_group_dir - copy_len, "/%s.d", pg->sanitized);
+            ensure_dir(copy_group_dir, 0755);
+        }
+        
         char manifest_path[PATH_MAX];
         FILE *manifest = NULL;
         if(path_join(group_dir, "manifest.json", manifest_path, sizeof manifest_path)) {
@@ -1435,12 +1478,26 @@ static int sweep_pattern_groups(SweepContext *ctx) {
             snprintf(dest_name, sizeof dest_name, "%.*s_%s%s", (int)bl, trimmed, idxbuf, stub_ext);
             char dest[PATH_MAX];
             if(!path_join(group_dir, dest_name, dest, sizeof dest)) continue;
-        if(svc_rename_ctx(ctx, pg->entries[j].path, dest)==0) {
-            moved_total++;
-            char rel[PATH_MAX]; sanitize_live_path(ctx, dest, rel, sizeof rel);
-            SVC_LOG_LIVE_STATUS(ctx, lbl, rel);
-            snprintf(pg->entries[j].path, sizeof pg->entries[j].path, "%s", dest);
-        }
+            
+            if(do_copy) {
+                // Copy to copy_to location, preserving original files in place
+                char copy_dest[PATH_MAX];
+                if(path_join(copy_group_dir, dest_name, copy_dest, sizeof copy_dest)) {
+                    if(copy_file(pg->entries[j].path, copy_dest)) {
+                        copied_total++;
+                        char rel[PATH_MAX]; sanitize_live_path(ctx, copy_dest, rel, sizeof rel);
+                        SVC_LOG_LIVE_STATUS(ctx, lbl, rel);
+                    }
+                }
+            } else {
+                // Normal operation: move files to refactored structure
+                if(svc_rename_ctx(ctx, pg->entries[j].path, dest)==0) {
+                    moved_total++;
+                    char rel[PATH_MAX]; sanitize_live_path(ctx, dest, rel, sizeof rel);
+                    SVC_LOG_LIVE_STATUS(ctx, lbl, rel);
+                    snprintf(pg->entries[j].path, sizeof pg->entries[j].path, "%s", dest);
+                }
+            }
             if(manifest) {
                 fprintf(manifest, "  {\"path\": \"%s\", \"hash\": \"%s\"}%s\n",
                         pg->entries[j].path, pg->entries[j].hash, (j+1<pg->count)?",":"");
@@ -1452,7 +1509,11 @@ static int sweep_pattern_groups(SweepContext *ctx) {
         }
     }
     SVC_LOG_LIVE_DONE(ctx);
-    SVC_LOG_INFO(ctx, "%s grouped_moves=%zu", lbl, moved_total);
+    if(do_copy) {
+        SVC_LOG_INFO(ctx, "%s grouped_moves=%zu copied=%zu", lbl, moved_total, copied_total);
+    } else {
+        SVC_LOG_INFO(ctx, "%s grouped_moves=%zu", lbl, moved_total);
+    }
     pattern_groups_reset();
     return 0;
 }

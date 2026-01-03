@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <signal.h>
+#include <sys/stat.h>
 
 #include "logging.h"
 #include "live_lines.h"
@@ -18,7 +19,7 @@ static volatile sig_atomic_t g_sig_stop = 0;
 static void on_sigint(int sig) { (void)sig; g_sig_stop = 1; forensic_signal_stop(); }
 
 static void usage(const char *argv0) {
-    printf("Usage: %s <root> [--verbose] [--no-content-analysis] [--no-path-refactor] [--sanitize-underscores] [--identifiers=csv]\n", argv0);
+    printf("Usage: %s <root> [--verbose] [--no-content-analysis] [--no-path-refactor] [--sanitize-underscores] [--identifiers=csv] [--structured-data-copy-to=<path>]\n", argv0);
     printf("Sweeps:\n");
     printf("  00 identifiers (opt-in via --identifiers): detect composer/symfony/drupal/node and move to identified/\n");
     printf("  01 scan & hash: walk root, hash files\n");
@@ -32,6 +33,8 @@ static void usage(const char *argv0) {
     printf("  09 filename pattern dedup: drop duplicate _N variants\n");
     printf("  10 pattern grouping: group stub variants into <stub>.d/\n");
     printf("  11 empty dir cleanup: final cleanup pass\n");
+    printf("\nOptions:\n");
+    printf("  --structured-data-copy-to=<path>  Copy structured files to specified path while leaving originals in place\n");
 }
 
 static void derive_namespace(const char *path, char *out, size_t out_sz) {
@@ -67,6 +70,7 @@ int main(int argc, char **argv) {
     unsigned int ident_mask = 0;
     bool prewarm = false;
     bool prewarm_only = false;
+    const char *copy_to_arg = NULL;
 
     for(int i=1;i<argc;i++) {
         if(strcmp(argv[i],"--verbose")==0) log_set_verbose(true);
@@ -86,6 +90,21 @@ int main(int argc, char **argv) {
                     else if(strcmp(tok,"node")==0 || strcmp(tok,"node.js")==0 || strcmp(tok,"nodejs")==0) ident_mask |= 1u<<3;
                 }
                 free(buf);
+            }
+        }
+        else if(strncmp(argv[i], "--structured-data-copy-to=", strlen("--structured-data-copy-to="))==0) {
+            copy_to_arg = argv[i] + strlen("--structured-data-copy-to=");
+            if(!copy_to_arg || !*copy_to_arg) {
+                log_error("--structured-data-copy-to requires a path argument");
+                return 1;
+            }
+        }
+        else if(strncmp(argv[i], "structured-data-copy-to=", strlen("structured-data-copy-to="))==0) {
+            // Also accept structured-data-copy-to= without -- prefix for convenience
+            copy_to_arg = argv[i] + strlen("structured-data-copy-to=");
+            if(!copy_to_arg || !*copy_to_arg) {
+                log_error("structured-data-copy-to requires a path argument");
+                return 1;
             }
         }
         else if(argv[i][0]=='-') { usage(argv[0]); return 1; }
@@ -125,6 +144,56 @@ int main(int argc, char **argv) {
     ctx.enable_identifiers = ident_mask != 0;
     ctx.ident_mask = ident_mask;
     derive_namespace(root, ctx.ns, sizeof ctx.ns);
+    
+    if(copy_to_arg) {
+        // First, try to resolve the path (works if it exists)
+        char copy_to_resolved[PATH_MAX];
+        char *resolved = realpath(copy_to_arg, copy_to_resolved);
+        
+        if(resolved) {
+            // Path exists, use resolved absolute path
+            normalize_root(copy_to_resolved);
+            snprintf(ctx.copy_to, sizeof ctx.copy_to, "%s", copy_to_resolved);
+        } else {
+            // Path doesn't exist yet, create it
+            // Convert relative paths to absolute based on current working directory
+            char cwd[PATH_MAX];
+            if(getcwd(cwd, sizeof cwd) == NULL) {
+                log_error("unable to get current working directory");
+                return 1;
+            }
+            
+            char abs_path[PATH_MAX];
+            if(copy_to_arg[0] == '/') {
+                // Already absolute
+                snprintf(abs_path, sizeof abs_path, "%s", copy_to_arg);
+            } else {
+                // Relative path - join with cwd
+                if(!path_join(cwd, copy_to_arg, abs_path, sizeof abs_path)) {
+                    log_error("copy-to path too long: %s", copy_to_arg);
+                    return 1;
+                }
+            }
+            
+            // Create the directory and all parent directories
+            if(!ensure_dir(abs_path, 0755)) {
+                log_error("unable to create copy-to directory: %s", abs_path);
+                return 1;
+            }
+            
+            normalize_root(abs_path);
+            snprintf(ctx.copy_to, sizeof ctx.copy_to, "%s", abs_path);
+        }
+        
+        // Verify the directory exists and is accessible
+        struct stat st;
+        if(stat(ctx.copy_to, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            log_error("copy-to path is not a directory: %s", ctx.copy_to);
+            return 1;
+        }
+    } else {
+        ctx.copy_to[0] = '\0';
+    }
 
     setenv("FORENSIC_ROOT", ctx.root, 1);
     log_info("forensic initialized root=%s threads=%d verbose=%s", ctx.root, ctx.threads, g_verbose?"yes":"no");

@@ -9,7 +9,7 @@ Forensic is a single C11 binary that sweeps a target directory and normalizes it
 
 ## Usage
 ```
-./forensic <root> [--verbose] [--no-content-analysis] [--no-path-refactor] [--sanitize-underscores] [--identifiers=csv]
+./forensic <root> [--verbose] [--no-content-analysis] [--no-path-refactor] [--sanitize-underscores] [--identifiers=csv] [--structured-data-copy-to=<path>]
 ```
 - `<root>` defaults to `.` and is resolved to an absolute path.
 - `--verbose` enables debug logging.
@@ -17,14 +17,15 @@ Forensic is a single C11 binary that sweeps a target directory and normalizes it
 - `--no-path-refactor` skips in-file path rewrites.
 - `--sanitize-underscores` is parsed but currently unused by any sweep.
 - `--identifiers=drupal,symfony` opt-in framework detection; omit to skip sweep 00 entirely.
+- `--structured-data-copy-to=<path>` copies structured files to the specified destination path while leaving originals in place. The destination directory will be created if it doesn't exist. Also accepts `structured-data-copy-to=<path>` format (without `--` prefix).
 - **Do not run the tool against this repository itself** unless you intentionally want it to move files into category folders and delete duplicates.
 
 ## Sweep Pipeline (in order)
 0. **Identifiers** (opt-in): searches for composer/symfony/drupal/node markers and moves matched projects to `identified/<key>/<name>`, exempting them from later sweeps.  
 1. **Scan & hash**: walks the tree (skipping `.git`, `.gitarchive`, `identified`) and logs SHA-256 hashes.  
 2. **Git archive relocation**: moves nested `.git` directories into `<root>/.gitarchive/.gitN`.  
-3. **Category creation**: ensures category directories exist: `unknown`, `archive`, `c`, `javascript`, `python`, `ruby`, `php`, `markdown`, `css`, `json`, `image`, `data`, `template`, `yml`, `map`, `html`, `text`.  
-4. **File movement**: flattens files into the matching category directory based on extension (e.g., `.js/.ts`→`javascript`, `.py`→`python`, `.php/.module/.install`→`php`, `.png/.jpg/.svg/.ico/.gif`→`image`; unrecognized → `unknown`).  
+3. **Category creation**: ensures category directories exist: `unknown`, `archive`, `c`, `javascript`, `python`, `ruby`, `php`, `markdown`, `css`, `json`, `image`, `data`, `template`, `yml`, `map`, `html`, `text`, `java`, `music`, `executable`.  
+4. **File movement**: flattens files into the matching category directory based on extension (e.g., `.js/.ts/.mjs/.cjs`→`javascript`, `.py`→`python`, `.php/.module/.install`→`php`, `.png/.jpg/.svg/.ico/.gif/.pdf/.webp/.avif`→`image`, `.java/.class/.kt`→`java`, `.mp3/.mp4/.wav/.ogg/.mov/.avi`→`music`, `.exe/.bin/.sh/.bat/.app`→`executable`; unrecognized → `unknown`). When `--structured-data-copy-to` is specified, files are copied to the destination with the structured folder organization while originals remain unchanged in their current locations.  
 5. **Content analysis**: when enabled, scans files ≤512 KB for path-like tokens using built-in regexes (or overrides in `<root>/regex/`), collects unique tokens, and logs counts.  
 6. **Path-hash dedup**: hashes the collected tokens and logs unique counts.  
 7. **Path refactor**: when enabled, rewrites path-like tokens in-place to be relative to `<root>` when they resolve inside the tree, then writes the modified files.  
